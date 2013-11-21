@@ -205,7 +205,7 @@ public class XMLRPCClient {
 		responseParser = new ResponseParser();
 
 		cookieManager = new CookieManager(flags);
-		authManager = new AuthenticationManager();
+		authManager = new NoAuthenticationManager();
 
 		httpParameters.put(CONTENT_TYPE, TYPE_XML);
 		httpParameters.put(USER_AGENT, userAgent);
@@ -338,14 +338,19 @@ public class XMLRPCClient {
 	}
 
 	/**
-	 * Set the username and password that should be used to perform basic
-	 * http authentication.
+	 * Set the username and password that should be used to perform http authentication.
 	 *
 	 * @param user Username
 	 * @param pass Password
 	 */
-	public void setLoginData(String user, String pass) {
-		authManager.setAuthData(user, pass);
+	public void setLoginData(Class<? extends AuthenticationManager> managerType, String user, String pass) {
+		try {
+			authManager = managerType.newInstance();
+			authManager.setAuthData(user, pass);
+		} catch (Exception e) {
+			throw new IllegalArgumentException("Cannot install this " + managerType.getName()
+					+ " as authentication manager: " + e.toString());
+		}
 	}
 
 	/**
@@ -629,30 +634,7 @@ public class XMLRPCClient {
 				else
 					conn = url.openConnection();
 
-				http = verifyConnection(conn);
-				http.setInstanceFollowRedirects(false);
-				http.setRequestMethod(HTTP_POST);
-				http.setDoOutput(true);
-				http.setDoInput(true);
-
-				// Set timeout
-				if(timeout > 0) {
-					http.setConnectTimeout(timeout * 1000);
-					http.setReadTimeout(timeout * 1000);
-				}
-
-				// Set the request parameters
-				for(Map.Entry<String,String> param : httpParameters.entrySet()) {
-					http.setRequestProperty(param.getKey(), param.getValue());
-				}
-
-				authManager.setAuthentication(http);
-				cookieManager.setCookies(http);
-
-				OutputStreamWriter stream = new OutputStreamWriter(http.getOutputStream());
-				stream.write(c.getXML());
-				stream.flush();
-				stream.close();
+				http = prepareRequest(c, conn);
 
 				// Try to get the status code from the connection
 				int statusCode;
@@ -665,6 +647,15 @@ public class XMLRPCClient {
 					// the normal exceptipon handling can take care of this, since
 					// it is a real error.
 					statusCode = http.getResponseCode();
+				}
+				
+				// On HTTP 401, perhaps we need to renew the authentification and try again
+				if (statusCode == HttpURLConnection.HTTP_UNAUTHORIZED) {
+					HttpURLConnection renewed = authManager.renewAuthentification(http);
+					if (renewed != null) {
+						http = prepareRequest(c, renewed);
+						statusCode = http.getResponseCode();
+					}
 				}
 
 				InputStream istream;
@@ -750,6 +741,35 @@ public class XMLRPCClient {
 				}
 			}
 
+		}
+
+		private HttpURLConnection prepareRequest(Call c, URLConnection conn) throws XMLRPCException, ProtocolException, IOException {
+			http = verifyConnection(conn);
+			http.setInstanceFollowRedirects(false);
+			http.setRequestMethod(HTTP_POST);
+			http.setDoOutput(true);
+			http.setDoInput(true);
+
+			// Set timeout
+			if(timeout > 0) {
+				http.setConnectTimeout(timeout * 1000);
+				http.setReadTimeout(timeout * 1000);
+			}
+
+			// Set the request parameters
+			for(Map.Entry<String,String> param : httpParameters.entrySet()) {
+				http.setRequestProperty(param.getKey(), param.getValue());
+			}
+
+			authManager.prepareAuthentication(http);
+			cookieManager.setCookies(http);
+
+			OutputStreamWriter stream = new OutputStreamWriter(http.getOutputStream());
+			stream.write(c.getXML());
+			stream.flush();
+			stream.close();
+			
+			return http;
 		}
 
 		/**

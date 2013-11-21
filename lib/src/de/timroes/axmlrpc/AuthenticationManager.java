@@ -1,55 +1,41 @@
 package de.timroes.axmlrpc;
 
-import de.timroes.base64.Base64;
 import java.net.HttpURLConnection;
 
 /**
- * The AuthenticationManager handle basic HTTP authentication.
+ * Interface for every type of authentication manager to handle some sort of HTTP authentication.
  * 
- * @author Tim Roes
+ * @author Eric Kok
  */
-public class AuthenticationManager {
+public interface AuthenticationManager {
 	
-	private String user;
-	private String pass;
+	/**
+	 * Clear any authentication-related local data, such as the username and password.
+	 */
+	public void clearAuthData();
 
 	/**
-	 * Clear the username and password. No basic HTTP authentication will be used
-	 * in the next calls.
-	 */
-	public void clearAuthData() {
-		this.user = null;
-		this.pass = null;
-	}
-	
-	/**
-	 * Set the username and password that should be used to perform basic
-	 * http authentication.
+	 * Set the username and password that should be used to perform http authentication.
 	 * 
 	 * @param user Username
 	 * @param pass Password
 	 */
-	public void setAuthData(String user, String pass) {
-		this.user = user;
-		this.pass = pass;
-	}
+	public void setAuthData(String user, String pass);
 
 	/**
-	 * Set the authentication at the HttpURLConnection.
+	 * Prepare some http request for authentification, such as by setting the correct headers.
 	 * 
-	 * @param http The HttpURLConnection to set authentication.
+	 * @param http The HttpURLConnection to set authentication on.
 	 */
-	public void setAuthentication(HttpURLConnection http) {
-		
-		if(user == null || pass == null 
-				|| user.length() <= 0 || pass.length() <= 0) {
-			return;
-		}
-
-		String base64login = Base64.encode(user + ":" + pass);
-
-		http.addRequestProperty("Authorization", "Basic " + base64login);
-		
-	}
+	public void prepareAuthentication(HttpURLConnection http);
+	
+	/**
+	 * Called after a failed first attempt, try to renew the authentication (based on the current response) so we can
+	 * retry this http request.
+	 * 
+	 * @param http The old, failed HttpURLConnection, which now contains a response body and headers.
+	 * @return A newly instantiated and initialized HttpURLCOnnection object, or null if not supported.
+	 */
+	public HttpURLConnection renewAuthentification(HttpURLConnection http);
 	
 }

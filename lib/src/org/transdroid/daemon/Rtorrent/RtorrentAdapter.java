@@ -66,6 +66,7 @@ import org.transdroid.daemon.task.SetTransferRatesTask;
 import org.transdroid.daemon.util.DLog;
 import org.transdroid.daemon.util.FakeTrustManager;
 
+import de.timroes.axmlrpc.BasicOrDigestAuthenticationManager;
 import de.timroes.axmlrpc.XMLRPCClient;
 import de.timroes.axmlrpc.XMLRPCException;
 
@@ -279,7 +280,8 @@ public class RtorrentAdapter implements IDaemonAdapter {
 		if (settings.getSsl() && settings.getSslTrustKey() != null && !settings.getSslTrustKey().isEmpty())
 			this.rpcclient.installCustomTrustManager(new FakeTrustManager(settings.getSslTrustKey()));
 		this.rpcclient.setTimeout(settings.getTimeoutInMilliseconds() / 1000);
-		this.rpcclient.setLoginData(settings.getUsername(), settings.getPassword());
+		this.rpcclient.setLoginData(BasicOrDigestAuthenticationManager.class, settings.getUsername(),
+				settings.getPassword());
 		
 	}
 	
