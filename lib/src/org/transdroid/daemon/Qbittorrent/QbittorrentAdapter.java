@@ -22,8 +22,13 @@ import java.io.FileNotFoundException;
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.text.NumberFormat;
+import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.MissingResourceException;
+import java.util.ResourceBundle;
 
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
@@ -38,6 +43,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.transdroid.daemon.Daemon;
 import org.transdroid.daemon.DaemonException;
+import org.transdroid.daemon.DaemonException.ExceptionType;
 import org.transdroid.daemon.DaemonSettings;
 import org.transdroid.daemon.IDaemonAdapter;
 import org.transdroid.daemon.Priority;
@@ -45,7 +51,6 @@ import org.transdroid.daemon.Torrent;
 import org.transdroid.daemon.TorrentDetails;
 import org.transdroid.daemon.TorrentFile;
 import org.transdroid.daemon.TorrentStatus;
-import org.transdroid.daemon.DaemonException.ExceptionType;
 import org.transdroid.daemon.task.AddByFileTask;
 import org.transdroid.daemon.task.AddByMagnetUrlTask;
 import org.transdroid.daemon.task.AddByUrlTask;
@@ -64,6 +69,7 @@ import org.transdroid.daemon.task.SetFilePriorityTask;
 import org.transdroid.daemon.task.SetTransferRatesTask;
 import org.transdroid.daemon.util.DLog;
 import org.transdroid.daemon.util.HttpHelper;
+
 import com.android.internalcopy.http.multipart.FilePart;
 import com.android.internalcopy.http.multipart.MultipartEntity;
 import com.android.internalcopy.http.multipart.Part;
@@ -79,11 +85,53 @@ public class QbittorrentAdapter implements IDaemonAdapter {
 	private DaemonSettings settings;
 	private DefaultHttpClient httpclient;
 	private int version = -1;
+	private Locale remoteLocale;
+	private ResourceBundle unitsBundle;
 
 	public QbittorrentAdapter(DaemonSettings settings) {
 		this.settings = settings;
 	}
 
+	// because of localized size and speed 
+	private synchronized void ensureLocale() throws DaemonException {
+		if (null != remoteLocale) {
+			return;
+		}
+		
+		String prefs = makeRequest("/json/preferences");
+		try {
+			JSONObject preferences = new JSONObject(prefs);
+			String locale = preferences.getString("locale");
+			String[] parts = locale.split("_");
+			if (parts.length > 1) {
+				remoteLocale = new Locale(parts[0], parts[1]);
+			} else {
+				remoteLocale = new Locale(parts[0]);
+			}
+		} catch (JSONException e) {
+			// We can't decide, then we leave the remote locale unset.
+		}
+		
+		// TEST
+//		if (null == this.getClass().getResourceAsStream("/org/transdroid/daemon/Qbittorrent/units_fr.properties")) {
+//			DLog.e(LOG_NAME, "Unable to load resource file");
+//			throw new NullPointerException("Unable to load resource file " + "/org/transdroid/daemon/Qbittorrent/units_fr.properties");
+//		}
+		
+		// As long as we don't have a correct answer from the server, we refresh the bundle to use
+		// this shouldn't happen often hopefully
+		Locale usedLocale = null != remoteLocale ? remoteLocale : Locale.getDefault();
+		try {
+			unitsBundle = ResourceBundle.getBundle("org/transdroid/daemon/Qbittorrent/units", usedLocale, Thread.currentThread().getContextClassLoader());
+			DLog.d(LOG_NAME, "Loaded units bundle using locale " + remoteLocale.getDisplayName());
+		} catch (MissingResourceException e) {
+			DLog.e(LOG_NAME, "Unable to load resource bundle for required units");
+			// try a mode direct approach!
+			String pack = this.getClass().getPackage().getName();
+			unitsBundle = ResourceBundle.getBundle(pack + ".units", usedLocale, Thread.currentThread().getContextClassLoader());
+		}
+	}
+	
 	private synchronized void ensureVersion() throws DaemonException {
 		if (version > 0)
 			return;
@@ -132,6 +180,7 @@ public class QbittorrentAdapter implements IDaemonAdapter {
 	public DaemonTaskResult executeTask(DaemonTask task) {
 
 		try {
+			ensureLocale();
 			ensureVersion();
 			switch (task.getMethod()) {
 			case Retrieve:
@@ -396,10 +445,23 @@ public class QbittorrentAdapter implements IDaemonAdapter {
 
 	}
 
+	private Double parseNumber(String string) {
+		try {
+			NumberFormat nf = NumberFormat.getInstance(remoteLocale);
+			return nf.parse(string).doubleValue();
+		} catch (ParseException e) {
+			DLog.d(LOG_NAME, "Reverting back to pseudo normalization");
+			return Double.parseDouble(normalizeNumber(string));
+		} catch (NumberFormatException e) {
+			DLog.d(LOG_NAME, "Reverting back to pseudo normalization");
+			return Double.parseDouble(normalizeNumber(string));
+		}
+	}
+	
 	private double parseRatio(String string) {
 		// Ratio is given in "1.5" string format
 		try {
-			return Double.parseDouble(normalizeNumber(string));
+			return parseNumber(string);
 		} catch (Exception e) {
 			return 0D;
 		}
@@ -413,20 +475,18 @@ public class QbittorrentAdapter implements IDaemonAdapter {
 		String[] parts = string.split(" ");
 		double number;
 		try {
-			number = Double.parseDouble(normalizeNumber(parts[0]));
+			number = parseNumber(string);
 		} catch (Exception e) {
 			return -1L;
 		}
+
 		// Returns size in B-based long
-		if (parts[1].equals("TiB")) {
-			return (long) (number * 1024L * 1024L * 1024L * 1024L);
-		} else if (parts[1].equals("GiB")) {
-			return (long) (number * 1024L * 1024L * 1024L);
-		} else if (parts[1].equals("MiB")) {
-			return (long) (number * 1024L * 1024L);
-		} else if (parts[1].equals("KiB")) {
-			return (long) (number * 1024L);
+		for(IUnit unit: SizeUnit.values()) {
+			if (parts[1].equals(unitsBundle.getString(unit.key()))) {
+				return (long) (number * unit.getMultiplier());
+			}
 		}
+		// No suitable conversion found for unit
 		return (long) number;
 	}
 
@@ -449,19 +509,18 @@ public class QbittorrentAdapter implements IDaemonAdapter {
 		String[] parts = speed.split(" ");
 		double number;
 		try {
-			number = Double.parseDouble(normalizeNumber(parts[0]));
+			number = parseNumber(parts[0]);
 		} catch (Exception e) {
 			return -1;
 		}
 		// Returns size in B-based int
-		if (parts[1].equals("GiB/s")) {
-			return (int) (number * 1024 * 1024 * 1024);
-		} else if (parts[1].equals("MiB/s")) {
-			return (int) (number * 1024 * 1024);
-		} else if (parts[1].equals("KiB/s")) {
-			return (int) (number * 1024);
+		for(IUnit unit: SpeedUnit.values()) {
+			if (parts[1].equals(unitsBundle.getString(unit.key()))) {
+				return (int) (number * unit.getMultiplier());
+			}
 		}
-		return (int) (Double.parseDouble(normalizeNumber(parts[0])));
+		// No suitable conversion found for unit
+		return (parseNumber(parts[0])).intValue();
 	}
 
 	private String normalizeNumber(String in) {

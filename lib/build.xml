@@ -23,11 +23,15 @@
          from the the javac element. -->
     <javac
 	srcdir="src/"
+	debug="true"
 	destdir="build/"
 	bootclasspath="${sdk-location}/platforms/${android.version}/android.jar"
 	source="6"
 	target="6"
 	/>
+  	<copy todir="build/">
+  		<fileset dir="src/" excludes="**/*.java"/>
+  	</copy>
     <jar
 	destfile="../core/libs/transdroid.jar"
 	basedir="build/"
